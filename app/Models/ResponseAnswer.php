@@ -11,6 +11,16 @@ class ResponseAnswer extends Model
         'response_id',
         'question_id',
         'jawaban',
+        'val_int',
+        'val_decimal',
+        'val_date',
+        'val_string',
+    ];
+
+    protected $casts = [
+        'val_int' => 'integer',
+        'val_decimal' => 'decimal:2',
+        'val_date' => 'date',
     ];
 
     public function response(): BelongsTo

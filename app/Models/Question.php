@@ -9,6 +9,7 @@ class Question extends Model
 {
     protected $fillable = [
         'questionnaire_id',
+        'code',
         'question_bank_item_id',
         'pertanyaan',
         'tipe',

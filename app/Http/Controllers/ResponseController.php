@@ -14,6 +14,8 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Arr;
 use Carbon\Carbon;
 use App\Services\AuditLogger;
 
@@ -336,17 +338,24 @@ class ResponseController extends Controller
 
             if (!empty($answers)) {
                 $now = now();
-                $payload = array_map(function ($answer) use ($response, $now) {
-                    return [
+                $hasNormalizedColumns = $this->hasNormalizedAnswerColumns();
+                $payload = [];
+                foreach ($answers as $answer) {
+                    $rawAnswer = $answer['jawaban'] ?? null;
+                    $row = [
                         'response_id' => $response->id,
                         'question_id' => $answer['question_id'],
-                        'jawaban' => is_array($answer['jawaban'])
-                            ? json_encode($answer['jawaban'])
-                            : $answer['jawaban'],
+                        'jawaban' => $this->encodeAnswerValue($rawAnswer),
                         'created_at' => $now,
                         'updated_at' => $now,
                     ];
-                }, $answers);
+
+                    if ($hasNormalizedColumns) {
+                        $row = array_merge($row, $this->normalizeAnswerPayload($rawAnswer));
+                    }
+
+                    $payload[] = $row;
+                }
                 ResponseAnswer::insert($payload);
             }
 
@@ -660,6 +669,145 @@ class ResponseController extends Controller
         ];
         Cache::forget('responses:summary:' . $questionnaireId . ':' . md5(json_encode($emptyFilters)));
         Cache::forget('dashboard:insights:' . $questionnaireId . ':' . md5(json_encode([])));
+
+        if ($questionnaireId > 0) {
+            $versionKey = "dashboard:tracer:accreditation:version:{$questionnaireId}";
+            $current = (int) Cache::get($versionKey, 1);
+            Cache::forever($versionKey, $current + 1);
+        }
+    }
+
+    protected function hasNormalizedAnswerColumns(): bool
+    {
+        static $cached = null;
+        if ($cached !== null) {
+            return $cached;
+        }
+
+        $cached = Schema::hasColumns('response_answers', [
+            'val_int',
+            'val_decimal',
+            'val_date',
+            'val_string',
+        ]);
+
+        return $cached;
+    }
+
+    protected function normalizeAnswerPayload($rawAnswer): array
+    {
+        $scalar = $this->extractScalarAnswer($rawAnswer);
+        $stringValue = $this->normalizeComparableText($scalar);
+        $intValue = $this->normalizeIntegerValue($scalar);
+        $decimalValue = $this->normalizeDecimalValue($scalar);
+        $dateValue = $this->normalizeDateValue($scalar);
+
+        return [
+            'val_int' => $intValue,
+            'val_decimal' => $decimalValue,
+            'val_date' => $dateValue,
+            'val_string' => $stringValue,
+        ];
+    }
+
+    protected function encodeAnswerValue($rawAnswer)
+    {
+        if (is_array($rawAnswer)) {
+            return json_encode($rawAnswer);
+        }
+        if ($rawAnswer === null) {
+            return null;
+        }
+        return (string) $rawAnswer;
+    }
+
+    protected function extractScalarAnswer($rawAnswer): ?string
+    {
+        if (is_array($rawAnswer)) {
+            $flat = Arr::flatten($rawAnswer);
+            foreach ($flat as $item) {
+                if ($item === null || is_array($item) || is_object($item)) {
+                    continue;
+                }
+                $text = trim((string) $item);
+                if ($text !== '') {
+                    return $text;
+                }
+            }
+            return null;
+        }
+
+        if ($rawAnswer === null) {
+            return null;
+        }
+
+        $text = trim((string) $rawAnswer);
+        return $text !== '' ? $text : null;
+    }
+
+    protected function normalizeComparableText(?string $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $normalized = strtolower(trim($value));
+        $normalized = preg_replace('/\s+/', ' ', $normalized);
+        if (!$normalized) {
+            return null;
+        }
+
+        return mb_substr($normalized, 0, 255);
+    }
+
+    protected function normalizeIntegerValue(?string $value): ?int
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $digitsOnly = preg_replace('/[^0-9\-]/', '', $value);
+        if ($digitsOnly === '' || $digitsOnly === '-') {
+            return null;
+        }
+
+        if (!is_numeric($digitsOnly)) {
+            return null;
+        }
+
+        return (int) $digitsOnly;
+    }
+
+    protected function normalizeDecimalValue(?string $value): ?float
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        $normalized = preg_replace('/[^0-9,\.\-]/', '', $value);
+        if ($normalized === '' || $normalized === '-') {
+            return null;
+        }
+
+        $normalized = str_replace(',', '.', $normalized);
+        if (!is_numeric($normalized)) {
+            return null;
+        }
+
+        return round((float) $normalized, 2);
+    }
+
+    protected function normalizeDateValue(?string $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($value)->toDateString();
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     protected function applyUserScope($query)

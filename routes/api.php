@@ -8,6 +8,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CtaController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DashboardInsightsController;
+use App\Http\Controllers\TracerAccreditationController;
 use App\Http\Controllers\EmailTemplateController;
 use App\Http\Controllers\HomepageController;
 use App\Http\Controllers\JobController;
@@ -84,6 +85,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Dashboard tracer (Protected)
     Route::get('/dashboard', [DashboardController::class, 'sample']);
     Route::get('/dashboard/summary', [DashboardController::class, 'adminSummary']);
+    Route::get('/dashboard/tracer/accreditation-summary', [TracerAccreditationController::class, 'summary']);
     Route::get('/dashboard/tracer', [DashboardController::class, 'tracerSummaryQuery']);
     Route::get('/dashboard/tracer/insights', [DashboardInsightsController::class, 'tracerInsights']);
     Route::get('/dashboard/tracer/{questionnaire_id}', [DashboardController::class, 'tracerSummary'])
