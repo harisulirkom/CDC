@@ -659,6 +659,7 @@ class ResponseController extends Controller
     protected function clearDashboardCache(int $questionnaireId): void
     {
         Cache::forget("dashboard:tracer:{$questionnaireId}");
+        Cache::forget("dashboard:tracer:query:{$questionnaireId}");
         $emptyFilters = [
             'fakultas' => null,
             'prodi' => null,

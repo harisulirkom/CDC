@@ -9,6 +9,7 @@ use App\Models\Response;
 use App\Models\ResponseAnswer;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema;
 
 class DashboardController extends Controller
 {
@@ -108,33 +109,152 @@ class DashboardController extends Controller
             ]);
         }
 
-        $summary = $this->tracerSummary($questionnaireId)->getData(true);
+        $cacheKey = "dashboard:tracer:query:{$questionnaireId}";
+        $payload = Cache::remember($cacheKey, 60, function () use ($questionnaireId) {
+            return $this->buildTracerSummaryQueryPayload($questionnaireId);
+        });
 
-        $statusCounts = $summary['status_chart'] ?? [];
-        $pendapatanBuckets = $summary['pendapatan_chart']['buckets'] ?? [];
-        $lokasiData = $summary['lokasi_chart']['data'] ?? [];
+        return response()->json($payload);
+    }
 
-        $pendapatan = [];
-        foreach ($pendapatanBuckets as $bucket) {
-            $pendapatan[$bucket['label']] = $bucket['total'] ?? 0;
-        }
+    protected function buildTracerSummaryQueryPayload(int $questionnaireId): array
+    {
+        $base = Response::query()->where('questionnaire_id', $questionnaireId);
 
-        $lokasiProvinsi = [];
-        foreach ($lokasiData as $row) {
-            $lokasiProvinsi[$row['provinsi']] = $row['total'] ?? 0;
-        }
+        $totalRespondents = (clone $base)
+            ->whereNotNull('alumni_id')
+            ->distinct('alumni_id')
+            ->count('alumni_id');
 
-        return response()->json([
-            'totalRespondents' => $summary['summary']['total_respondents'] ?? 0,
-            'statusCounts' => [
-                'bekerja' => $statusCounts['bekerja'] ?? 0,
-                'belum_bekerja' => $statusCounts['belum_bekerja'] ?? 0,
-                'wirausaha' => $statusCounts['wirausaha'] ?? 0,
-                'studi_lanjut' => $statusCounts['studi_lanjut'] ?? 0,
-            ],
+        $statusCounts = $this->buildStatusCountsFast($questionnaireId);
+        $pendapatan = $this->buildIncomeMapFast($questionnaireId);
+        $lokasiProvinsi = $this->buildLocationMapFast($questionnaireId);
+
+        return [
+            'totalRespondents' => $totalRespondents,
+            'statusCounts' => $statusCounts,
             'pendapatan' => $pendapatan,
             'lokasiProvinsi' => $lokasiProvinsi,
-        ]);
+        ];
+    }
+
+    protected function buildStatusCountsFast(int $questionnaireId): array
+    {
+        $rows = Response::query()
+            ->where('responses.questionnaire_id', $questionnaireId)
+            ->whereNotNull('responses.alumni_id')
+            ->join('alumnis', 'alumnis.id', '=', 'responses.alumni_id')
+            ->selectRaw('LOWER(COALESCE(alumnis.status_pekerjaan, "unknown")) as status_key, COUNT(DISTINCT responses.alumni_id) as total')
+            ->groupBy('status_key')
+            ->get();
+
+        $result = [
+            'bekerja' => 0,
+            'belum_bekerja' => 0,
+            'wirausaha' => 0,
+            'studi_lanjut' => 0,
+        ];
+
+        foreach ($rows as $row) {
+            $key = (string) $row->status_key;
+            $total = (int) ($row->total ?? 0);
+
+            if (str_contains($key, 'wira') || str_contains($key, 'usaha')) {
+                $result['wirausaha'] += $total;
+                continue;
+            }
+            if (str_contains($key, 'studi') || str_contains($key, 'kuliah')) {
+                $result['studi_lanjut'] += $total;
+                continue;
+            }
+            if (str_contains($key, 'belum') || str_contains($key, 'tidak')) {
+                $result['belum_bekerja'] += $total;
+                continue;
+            }
+            if (str_contains($key, 'bekerja')) {
+                $result['bekerja'] += $total;
+            }
+        }
+
+        return $result;
+    }
+
+    protected function buildIncomeMapFast(int $questionnaireId): array
+    {
+        $questionId = $this->findQuestionIdByAnyKeyword($questionnaireId, ['gaji', 'pendapatan', 'income']);
+        if (! $questionId) {
+            return [];
+        }
+
+        $hasNormalized = $this->hasAnswerNormalizedColumns();
+        $amountExpr = $hasNormalized
+            ? 'CASE
+                WHEN response_answers.val_int IS NOT NULL AND response_answers.val_int > 100000 THEN response_answers.val_int
+                WHEN response_answers.val_decimal IS NOT NULL AND response_answers.val_decimal > 0 AND response_answers.val_decimal <= 1000 THEN response_answers.val_decimal * 1000000
+                WHEN response_answers.val_int IS NOT NULL AND response_answers.val_int > 0 AND response_answers.val_int <= 1000 THEN response_answers.val_int * 1000000
+                ELSE CASE
+                    WHEN CAST(NULLIF(REGEXP_REPLACE(response_answers.jawaban, "[^0-9.]", ""), "") AS DECIMAL(20,2)) <= 1000
+                        THEN CAST(NULLIF(REGEXP_REPLACE(response_answers.jawaban, "[^0-9.]", ""), "") AS DECIMAL(20,2)) * 1000000
+                    ELSE CAST(NULLIF(REGEXP_REPLACE(response_answers.jawaban, "[^0-9.]", ""), "") AS DECIMAL(20,2))
+                END
+            END'
+            : 'CASE
+                WHEN CAST(NULLIF(REGEXP_REPLACE(response_answers.jawaban, "[^0-9.]", ""), "") AS DECIMAL(20,2)) <= 1000
+                    THEN CAST(NULLIF(REGEXP_REPLACE(response_answers.jawaban, "[^0-9.]", ""), "") AS DECIMAL(20,2)) * 1000000
+                ELSE CAST(NULLIF(REGEXP_REPLACE(response_answers.jawaban, "[^0-9.]", ""), "") AS DECIMAL(20,2))
+            END';
+
+        $row = ResponseAnswer::query()
+            ->join('responses', 'responses.id', '=', 'response_answers.response_id')
+            ->where('responses.questionnaire_id', $questionnaireId)
+            ->where('response_answers.question_id', $questionId)
+            ->selectRaw("
+                COUNT(DISTINCT CASE WHEN {$amountExpr} < 2000000 THEN response_answers.response_id END) as lt_2jt,
+                COUNT(DISTINCT CASE WHEN {$amountExpr} >= 2000000 AND {$amountExpr} < 4000000 THEN response_answers.response_id END) as btw_2_4jt,
+                COUNT(DISTINCT CASE WHEN {$amountExpr} >= 4000000 AND {$amountExpr} < 6000000 THEN response_answers.response_id END) as btw_4_6jt,
+                COUNT(DISTINCT CASE WHEN {$amountExpr} >= 6000000 THEN response_answers.response_id END) as gt_6jt
+            ")
+            ->first();
+
+        return [
+            '< 2jt' => (int) ($row->lt_2jt ?? 0),
+            '2-4jt' => (int) ($row->btw_2_4jt ?? 0),
+            '4-6jt' => (int) ($row->btw_4_6jt ?? 0),
+            '> 6jt' => (int) ($row->gt_6jt ?? 0),
+        ];
+    }
+
+    protected function buildLocationMapFast(int $questionnaireId): array
+    {
+        $questionId = $this->findQuestionIdByAnyKeyword($questionnaireId, ['provinsi', 'lokasi', 'domisili']);
+        if (! $questionId) {
+            return [];
+        }
+
+        $locationExpr = $this->hasAnswerNormalizedColumns()
+            ? 'COALESCE(NULLIF(TRIM(response_answers.val_string), ""), LOWER(TRIM(response_answers.jawaban)))'
+            : 'LOWER(TRIM(response_answers.jawaban))';
+
+        $rows = ResponseAnswer::query()
+            ->join('responses', 'responses.id', '=', 'response_answers.response_id')
+            ->where('responses.questionnaire_id', $questionnaireId)
+            ->where('response_answers.question_id', $questionId)
+            ->selectRaw("{$locationExpr} as provinsi, COUNT(DISTINCT response_answers.response_id) as total")
+            ->groupByRaw($locationExpr)
+            ->orderByDesc('total')
+            ->limit(50)
+            ->get();
+
+        $result = [];
+        foreach ($rows as $row) {
+            $name = trim((string) ($row->provinsi ?? ''));
+            if ($name === '') {
+                $name = 'lainnya';
+            }
+            $result[$name] = (int) ($row->total ?? 0);
+        }
+
+        return $result;
     }
 
     protected function buildStatusChart(int $questionnaireId): array
@@ -272,5 +392,38 @@ class DashboardController extends Controller
         $question = $query->first();
 
         return $question?->id;
+    }
+
+    protected function findQuestionIdByAnyKeyword(int $questionnaireId, array $keywords): ?int
+    {
+        if (empty($keywords)) {
+            return null;
+        }
+
+        $cacheKey = 'dashboard:tracer:qid:' . $questionnaireId . ':kw:' . md5(json_encode($keywords));
+
+        return Cache::remember($cacheKey, 600, function () use ($questionnaireId, $keywords) {
+            $query = Question::query()->where('questionnaire_id', $questionnaireId);
+            $query->where(function ($sub) use ($keywords) {
+                foreach ($keywords as $index => $keyword) {
+                    $method = $index === 0 ? 'whereRaw' : 'orWhereRaw';
+                    $sub->$method('LOWER(pertanyaan) LIKE ?', ['%' . strtolower($keyword) . '%']);
+                }
+            });
+
+            $question = $query->orderBy('id')->first();
+            return $question?->id;
+        });
+    }
+
+    protected function hasAnswerNormalizedColumns(): bool
+    {
+        static $cached = null;
+        if ($cached !== null) {
+            return $cached;
+        }
+
+        $cached = Schema::hasColumns('response_answers', ['val_int', 'val_decimal', 'val_string']);
+        return $cached;
     }
 }
