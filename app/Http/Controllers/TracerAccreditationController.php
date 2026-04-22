@@ -116,10 +116,15 @@ class TracerAccreditationController extends Controller
     protected function resolveQuestionnaire(int $questionnaireId): ?Questionnaire
     {
         if ($questionnaireId > 0) {
-            return Questionnaire::find($questionnaireId);
+            $explicit = Questionnaire::find($questionnaireId);
+            if ($explicit && strtolower((string) $explicit->audience) === 'alumni') {
+                return $explicit;
+            }
         }
 
         return Questionnaire::query()
+            ->where('audience', 'alumni')
+            ->orderByDesc('is_active')
             ->orderByDesc('id')
             ->first();
     }
