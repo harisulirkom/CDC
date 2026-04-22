@@ -154,8 +154,10 @@ class ResponseController extends Controller
             // Token is Valid. Override the 'nim' in the payload to match the Token.
             // This prevents IDOR (using a valid token for NIM A but submitting for NIM B).
             $submissionData = $request->all();
-            $submissionData['nim'] = $tokenPayload['nim'];
-            $submissionData['alumni_id'] = null; // Clear ID to force lookup by NIM
+            $submissionData['nim'] = trim((string) $tokenPayload['nim']);
+            // Force identity from token and avoid triggering "alumni_id required"
+            // validation branch by removing alumni_id keys entirely.
+            unset($submissionData['alumni_id'], $submissionData['alumniId']);
 
             return $this->validateAndProcess($submissionData);
 
