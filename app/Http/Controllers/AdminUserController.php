@@ -32,6 +32,8 @@ class AdminUserController extends Controller
     {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
+            'username' => ['nullable', 'string', 'max:255'],
+            'avatar' => ['nullable', 'string', 'max:2000000'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'min:8', 'max:128'],
             'role_id' => ['nullable', 'exists:roles,id'],
@@ -63,6 +65,8 @@ class AdminUserController extends Controller
 
         $data = $request->validate([
             'name' => ['sometimes', 'string', 'max:255'],
+            'username' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'avatar' => ['sometimes', 'nullable', 'string', 'max:2000000'],
             'email' => ['sometimes', 'email', 'max:255', 'unique:users,email,' . $user->id],
             'password' => ['sometimes', 'string', 'min:8', 'max:128'],
             'role_id' => ['nullable', 'exists:roles,id'],
@@ -121,7 +125,8 @@ class AdminUserController extends Controller
             'name' => $user->name,
             'fullName' => $user->name,
             'email' => $user->email,
-            'username' => $user->email ? explode('@', $user->email)[0] : null,
+            'username' => $user->username ?: ($user->email ? explode('@', $user->email)[0] : null),
+            'avatar' => $user->avatar,
             'role' => $user->role->nama_role ?? null,
             'role_id' => $user->role_id,
             'fakultas_id' => $user->fakultas_id,
