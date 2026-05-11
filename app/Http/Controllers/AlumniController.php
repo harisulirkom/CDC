@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Auth;
 use App\Services\AuditLogger;
+use App\Services\AlumniImportProgress;
 
 class AlumniController extends Controller
 {
@@ -105,11 +106,24 @@ class AlumniController extends Controller
         // Save file to storage so Job can read it
         $path = $uploadedFile->store('imports');
         $fullPath = Storage::path($path);
+        $importId = (string) Str::uuid();
+        $totalRows = $this->countCsvDataRows($fullPath);
 
         $forceSync = app()->environment('local') || config('queue.default') === 'sync';
 
+        AlumniImportProgress::put($importId, [
+            'status' => 'queued',
+            'message' => 'File diterima server. Menunggu proses import...',
+            'percentage' => 0,
+            'total_rows' => $totalRows,
+            'processed_rows' => 0,
+            'success_count' => 0,
+            'error_count' => 0,
+            'user_id' => auth()->id(),
+        ]);
+
         if ($forceSync) {
-            (new \App\Jobs\ImportAlumniJob($fullPath, auth()->id()))->handle();
+            $summary = (new \App\Jobs\ImportAlumniJob($fullPath, auth()->id(), $importId, $totalRows))->handle();
 
             AuditLogger::log('alumni.import_completed', 'alumni', null, [
                 'mode' => 'sync',
@@ -118,11 +132,13 @@ class AlumniController extends Controller
             return response()->json([
                 'message' => 'Import selesai diproses.',
                 'job_status' => 'done',
+                'import_id' => $importId,
+                'summary' => $summary,
             ]);
         }
 
         // Dispatch Job (async)
-        \App\Jobs\ImportAlumniJob::dispatch($fullPath, auth()->id());
+        \App\Jobs\ImportAlumniJob::dispatch($fullPath, auth()->id(), $importId, $totalRows);
 
         AuditLogger::log('alumni.import_requested', 'alumni', null, [
             'mode' => 'queued',
@@ -131,7 +147,31 @@ class AlumniController extends Controller
         return response()->json([
             'message' => 'Import sedang berjalan di latar belakang. Jalankan worker queue agar data masuk.',
             'job_status' => 'queued',
+            'import_id' => $importId,
+            'summary' => [
+                'status' => 'queued',
+                'percentage' => 0,
+                'total_rows' => $totalRows,
+                'processed_rows' => 0,
+                'success_count' => 0,
+                'error_count' => 0,
+            ],
         ]);
+    }
+
+    public function importProgress(string $importId)
+    {
+        $progress = AlumniImportProgress::get($importId);
+
+        if (!$progress) {
+            return response()->json([
+                'message' => 'Status import tidak ditemukan.',
+                'status' => 'not_found',
+                'percentage' => 0,
+            ], 404);
+        }
+
+        return response()->json($progress);
     }
 
     /**
@@ -325,6 +365,39 @@ class AlumniController extends Controller
     protected function requiredImportFields(): array
     {
         return ['nama', 'nim', 'prodi', 'tahun_lulus'];
+    }
+
+    protected function countCsvDataRows(string $fullPath): int
+    {
+        $handle = fopen($fullPath, 'r');
+        if (!$handle) {
+            return 0;
+        }
+
+        $rows = 0;
+        $isHeader = true;
+
+        while (($row = fgetcsv($handle, 2000, ",")) !== false) {
+            if ($isHeader) {
+                $isHeader = false;
+                continue;
+            }
+
+            $isEmpty = true;
+            foreach ($row as $value) {
+                if (trim((string) $value) !== '') {
+                    $isEmpty = false;
+                    break;
+                }
+            }
+
+            if (!$isEmpty) {
+                $rows++;
+            }
+        }
+
+        fclose($handle);
+        return $rows;
     }
 
     protected function applyUserScope($query)
