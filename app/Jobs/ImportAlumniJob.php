@@ -4,12 +4,12 @@ namespace App\Jobs;
 
 use App\Models\Alumni;
 use App\Services\AlumniImportProgress;
+use Illuminate\Database\QueryException;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
@@ -141,20 +141,46 @@ class ImportAlumniJob implements ShouldQueue
 
     protected function processBatch(array $rows, int &$successCount, int &$errorCount)
     {
-        DB::beginTransaction();
-        try {
-            foreach ($rows as $data) {
+        foreach ($rows as $data) {
+            try {
+                $prepared = $this->prepareRecord($data);
                 Alumni::updateOrCreate(
-                    ['nim' => $data['nim']],
-                    $data
+                    ['nim' => $prepared['nim']],
+                    $prepared
                 );
                 $successCount++;
+            } catch (QueryException $e) {
+                if ($this->isDuplicateEmailError($e)) {
+                    try {
+                        $retryData = $data;
+                        $retryData['email'] = $this->buildFallbackEmail((string) ($data['nim'] ?? ''), true);
+                        $prepared = $this->prepareRecord($retryData, true);
+                        Alumni::updateOrCreate(
+                            ['nim' => $prepared['nim']],
+                            $prepared
+                        );
+                        $successCount++;
+                        continue;
+                    } catch (\Throwable $retryError) {
+                        Log::error("Import row failed after duplicate-email retry: " . $retryError->getMessage(), [
+                            'nim' => $data['nim'] ?? null,
+                            'email' => $data['email'] ?? null,
+                        ]);
+                    }
+                } else {
+                    Log::error("Import row query failed: " . $e->getMessage(), [
+                        'nim' => $data['nim'] ?? null,
+                        'email' => $data['email'] ?? null,
+                    ]);
+                }
+                $errorCount++;
+            } catch (\Throwable $e) {
+                $errorCount++;
+                Log::error("Import row failed: " . $e->getMessage(), [
+                    'nim' => $data['nim'] ?? null,
+                    'email' => $data['email'] ?? null,
+                ]);
             }
-            DB::commit();
-        } catch (\Exception $e) {
-            DB::rollBack();
-            $errorCount += count($rows);
-            Log::error("Batch Import Failed: " . $e->getMessage());
         }
     }
 
@@ -192,10 +218,53 @@ class ImportAlumniJob implements ShouldQueue
 
         // Auto-generate missing email
         if (empty($dbData['email'])) {
-            $dbData['email'] = strtolower(preg_replace('/[^a-z0-9]/', '', $dbData['nim'])) . '@placeholder.local';
+            $dbData['email'] = $this->buildFallbackEmail((string) $dbData['nim']);
         }
 
         return $dbData;
+    }
+
+    protected function prepareRecord(array $data, bool $forceFallbackEmail = false): array
+    {
+        $prepared = $data;
+        $nim = trim((string) ($prepared['nim'] ?? ''));
+        $email = trim((string) ($prepared['email'] ?? ''));
+
+        if ($nim === '') {
+            return $prepared;
+        }
+
+        if ($forceFallbackEmail || $email === '') {
+            $prepared['email'] = $this->buildFallbackEmail($nim, $forceFallbackEmail);
+            return $prepared;
+        }
+
+        $owner = Alumni::query()->where('email', $email)->first();
+        if ($owner && (string) $owner->nim !== $nim) {
+            $prepared['email'] = $this->buildFallbackEmail($nim, true);
+        }
+
+        return $prepared;
+    }
+
+    protected function isDuplicateEmailError(QueryException $e): bool
+    {
+        $message = strtolower($e->getMessage());
+        return str_contains($message, 'duplicate entry') && str_contains($message, 'email');
+    }
+
+    protected function buildFallbackEmail(string $nim, bool $strongUnique = false): string
+    {
+        $base = strtolower(preg_replace('/[^a-z0-9]/', '', $nim));
+        if ($base === '') {
+            $base = 'alumni';
+        }
+
+        if ($strongUnique) {
+            return $base . '+' . Str::lower((string) Str::uuid()) . '@import.local';
+        }
+
+        return $base . '@import.local';
     }
 
     protected function isEmptyRow(array $row): bool
