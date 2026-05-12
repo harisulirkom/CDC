@@ -51,6 +51,7 @@ class ImportAlumniJob implements ShouldQueue
         $processedRows = 0;
         $successCount = 0;
         $errorCount = 0;
+        $autoFixedEmailCount = 0;
         $lastProgressWrite = 0;
         $failedRows = [];
         $parseMeta = [
@@ -99,6 +100,7 @@ class ImportAlumniJob implements ShouldQueue
                 $rowNumber = (int) ($record['row_number'] ?? $processedRows + 1);
                 $data = is_array($record['data'] ?? null) ? $record['data'] : [];
                 $recordErrors = is_array($record['errors'] ?? null) ? $record['errors'] : [];
+                $recordMeta = is_array($record['meta'] ?? null) ? $record['meta'] : [];
 
                 if (!empty($recordErrors)) {
                     $errorCount++;
@@ -109,13 +111,23 @@ class ImportAlumniJob implements ShouldQueue
                         'email' => (string) ($data['email'] ?? ''),
                         'reason' => implode('; ', $recordErrors),
                     ];
-                    $this->writeProgressIfNeeded($processedRows, $successCount, $errorCount, $lastProgressWrite, $parseMeta);
+                    $this->writeProgressIfNeeded(
+                        $processedRows,
+                        $successCount,
+                        $errorCount,
+                        $lastProgressWrite,
+                        $parseMeta,
+                        $autoFixedEmailCount
+                    );
                     continue;
                 }
 
                 try {
-                    $this->upsertRecord($data);
+                    $fixedByDbGuard = $this->upsertRecord($data);
                     $successCount++;
+                    if (!empty($recordMeta['email_auto_fixed']) || $fixedByDbGuard) {
+                        $autoFixedEmailCount++;
+                    }
                 } catch (\Throwable $e) {
                     $errorCount++;
                     $failedRows[] = [
@@ -132,7 +144,14 @@ class ImportAlumniJob implements ShouldQueue
                     ]);
                 }
 
-                $this->writeProgressIfNeeded($processedRows, $successCount, $errorCount, $lastProgressWrite, $parseMeta);
+                $this->writeProgressIfNeeded(
+                    $processedRows,
+                    $successCount,
+                    $errorCount,
+                    $lastProgressWrite,
+                    $parseMeta,
+                    $autoFixedEmailCount
+                );
             }
 
             $failedReportPath = AlumniImportReport::storeFailedRows($this->importId, $failedRows);
@@ -144,6 +163,7 @@ class ImportAlumniJob implements ShouldQueue
                 message: 'Import selesai diproses.',
                 parseMeta: $parseMeta,
                 failedReportPath: $failedReportPath,
+                autoFixedEmailCount: $autoFixedEmailCount,
             );
             AlumniImportProgress::put($this->importId, $summary);
 
@@ -161,6 +181,7 @@ class ImportAlumniJob implements ShouldQueue
                 errorCount: $errorCount + 1,
                 message: 'Import gagal diproses: ' . $e->getMessage(),
                 parseMeta: $parseMeta,
+                autoFixedEmailCount: $autoFixedEmailCount,
             );
             AlumniImportProgress::put($this->importId, $summary);
 
@@ -170,9 +191,9 @@ class ImportAlumniJob implements ShouldQueue
         }
     }
 
-    protected function upsertRecord(array $data): void
+    protected function upsertRecord(array $data): bool
     {
-        $prepared = $this->prepareRecord($data);
+        ['payload' => $prepared, 'email_auto_fixed' => $emailAutoFixed] = $this->prepareRecord($data);
 
         try {
             Alumni::updateOrCreate(
@@ -191,38 +212,48 @@ class ImportAlumniJob implements ShouldQueue
                 ['nim' => (string) $retryData['nim']],
                 $retryData,
             );
+            $emailAutoFixed = true;
         }
+
+        return $emailAutoFixed;
     }
 
+    /** @return array{payload: array<string,mixed>, email_auto_fixed: bool} */
     protected function prepareRecord(array $data): array
     {
         $nim = trim((string) ($data['nim'] ?? ''));
         $email = trim((string) ($data['email'] ?? ''));
+        $emailAutoFixed = false;
 
         if ($email === '') {
             $email = $this->buildFallbackEmail($nim);
+            $emailAutoFixed = true;
         }
 
         $owner = Alumni::query()->where('email', $email)->first();
         if ($owner && (string) $owner->nim !== $nim) {
             $email = $this->buildFallbackEmail($nim, true);
+            $emailAutoFixed = true;
         }
 
         return [
-            'nama' => $data['nama'] ?? null,
-            'nim' => $nim,
-            'nik' => $data['nik'] ?? null,
-            'prodi' => $data['prodi'] ?? null,
-            'fakultas' => $data['fakultas'] ?? null,
-            'tahun_masuk' => $data['tahun_masuk'] ?? null,
-            'tahun_lulus' => $data['tahun_lulus'] ?? null,
-            'email' => $email,
-            'no_hp' => $data['no_hp'] ?? null,
-            'alamat' => $data['alamat'] ?? null,
-            'tanggal_lahir' => $data['tanggal_lahir'] ?? null,
-            'foto' => $data['foto'] ?? null,
-            'status_pekerjaan' => $data['status_pekerjaan'] ?? null,
-            'sent' => $data['sent'] ?? null,
+            'payload' => [
+                'nama' => $data['nama'] ?? null,
+                'nim' => $nim,
+                'nik' => $data['nik'] ?? null,
+                'prodi' => $data['prodi'] ?? null,
+                'fakultas' => $data['fakultas'] ?? null,
+                'tahun_masuk' => $data['tahun_masuk'] ?? null,
+                'tahun_lulus' => $data['tahun_lulus'] ?? null,
+                'email' => $email,
+                'no_hp' => $data['no_hp'] ?? null,
+                'alamat' => $data['alamat'] ?? null,
+                'tanggal_lahir' => $data['tanggal_lahir'] ?? null,
+                'foto' => $data['foto'] ?? null,
+                'status_pekerjaan' => $data['status_pekerjaan'] ?? null,
+                'sent' => (bool) ($data['sent'] ?? false),
+            ],
+            'email_auto_fixed' => $emailAutoFixed,
         ];
     }
 
@@ -252,6 +283,7 @@ class ImportAlumniJob implements ShouldQueue
         int $errorCount,
         int &$lastProgressWrite,
         array $parseMeta,
+        int $autoFixedEmailCount = 0,
         bool $force = false
     ): void {
         if (!$force && ($processedRows - $lastProgressWrite) < 25) {
@@ -266,6 +298,7 @@ class ImportAlumniJob implements ShouldQueue
             errorCount: $errorCount,
             message: 'Import sedang diproses...',
             parseMeta: $parseMeta,
+            autoFixedEmailCount: $autoFixedEmailCount,
         ));
     }
 
@@ -277,7 +310,8 @@ class ImportAlumniJob implements ShouldQueue
         int $errorCount,
         string $message,
         array $parseMeta = [],
-        ?string $failedReportPath = null
+        ?string $failedReportPath = null,
+        int $autoFixedEmailCount = 0
     ): array {
         $totalRows = max($this->totalRows ?? 0, $processedRows, 1);
         $percentage = (int) min(100, round(($processedRows / $totalRows) * 100));
@@ -300,7 +334,7 @@ class ImportAlumniJob implements ShouldQueue
             'delimiter' => $parseMeta['delimiter'] ?? ',',
             'encoding' => $parseMeta['encoding'] ?? 'UTF-8',
             'failed_report_path' => $failedReportPath,
+            'auto_fixed_email_count' => $autoFixedEmailCount,
         ];
     }
 }
-

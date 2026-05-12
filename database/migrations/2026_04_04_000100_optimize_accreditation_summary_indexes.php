@@ -72,6 +72,20 @@ return new class extends Migration {
 
     protected function indexExists(string $tableName, string $indexName): bool
     {
+        $driver = DB::getDriverName();
+
+        // SQLite lokal tidak punya information_schema.statistics
+        if ($driver === 'sqlite') {
+            $rows = DB::select("PRAGMA index_list('{$tableName}')");
+            foreach ($rows as $row) {
+                $name = (string) ($row->name ?? $row['name'] ?? '');
+                if ($name === $indexName) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         $database = DB::getDatabaseName();
         if (!$database) {
             return false;

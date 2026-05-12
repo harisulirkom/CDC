@@ -103,6 +103,7 @@ class AlumniImportParser
         $records = [];
         $validRows = 0;
         $invalidRows = 0;
+        $autoFixedEmailCount = 0;
         $emailSeen = [];
 
         for ($i = 1; $i < count($rows); $i++) {
@@ -123,6 +124,9 @@ class AlumniImportParser
                 ];
             } else {
                 $validRows++;
+                if (!empty($normalized['meta']['email_auto_fixed'])) {
+                    $autoFixedEmailCount++;
+                }
             }
 
             if ($includeRecords) {
@@ -130,6 +134,7 @@ class AlumniImportParser
                     'row_number' => $rowNumber,
                     'data' => $normalized['data'],
                     'errors' => $normalized['errors'],
+                    'meta' => $normalized['meta'] ?? [],
                 ];
             }
         }
@@ -152,6 +157,7 @@ class AlumniImportParser
             'can_import' => empty($missingRequiredHeaders) && $validRows > 0,
             'missing_required_headers' => $missingRequiredHeaders,
             'mapped_headers' => array_values(array_filter($mappedHeaders)),
+            'auto_fixed_email_count' => $autoFixedEmailCount,
             'errors' => array_slice($errors, 0, 200),
             'records' => $records,
         ];
@@ -463,11 +469,12 @@ class AlumniImportParser
     }
 
     /** @param array<string, int> $emailSeen
-     *  @return array{data: array<string,mixed>, errors: array<int,string>}
+     *  @return array{data: array<string,mixed>, errors: array<int,string>, meta: array<string,mixed>}
      */
     protected function normalizeRecord(array $row, string $mode, int $rowNumber, array &$emailSeen): array
     {
         $errors = [];
+        $emailAutoFixed = false;
         $nim = $this->cleanText($row['nim'] ?? null);
         $nama = $this->cleanText($row['nama'] ?? null);
         $prodi = $this->cleanText($row['prodi'] ?? null);
@@ -494,6 +501,7 @@ class AlumniImportParser
                 $errors[] = 'Email tidak valid';
             } else {
                 $email = $this->buildFallbackEmail($nim ?: ('row' . $rowNumber));
+                $emailAutoFixed = true;
             }
         }
 
@@ -503,6 +511,7 @@ class AlumniImportParser
                     $errors[] = 'Email duplikat dalam file';
                 } else {
                     $email = $this->buildFallbackEmail(($nim ?: 'row' . $rowNumber) . '-' . $rowNumber);
+                    $emailAutoFixed = true;
                 }
             }
             $emailSeen[$email] = 1;
@@ -526,10 +535,16 @@ class AlumniImportParser
             'tanggal_lahir' => $tanggalLahir,
             'foto' => $foto,
             'status_pekerjaan' => $statusPekerjaan,
-            'sent' => null,
+            'sent' => false,
         ];
 
-        return ['data' => $data, 'errors' => $errors];
+        return [
+            'data' => $data,
+            'errors' => $errors,
+            'meta' => [
+                'email_auto_fixed' => $emailAutoFixed,
+            ],
+        ];
     }
 
     protected function cleanText(?string $value): ?string
@@ -617,4 +632,3 @@ class AlumniImportParser
         return $base . '@import.local';
     }
 }
-
