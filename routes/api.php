@@ -130,7 +130,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
             // Bulk Import
             Route::post('/admin/alumni/import', [AlumniController::class, 'import']);
+            Route::post('/admin/alumni/import-preview', [AlumniController::class, 'importPreview']);
             Route::get('/admin/alumni/import-progress/{importId}', [AlumniController::class, 'importProgress']);
+            Route::get('/admin/alumni/import-report/{importId}', [AlumniController::class, 'downloadImportReport']);
             Route::post('/alumni/import', [AlumniController::class, 'import']);
             Route::post('/import-alumni', [AlumniController::class, 'import']);
 

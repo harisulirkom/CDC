@@ -5,15 +5,16 @@ namespace App\Http\Controllers;
 use App\Http\Requests\StoreAlumniRequest;
 use App\Http\Requests\UpdateAlumniRequest;
 use App\Http\Resources\AlumniResource;
+use App\Jobs\ImportAlumniJob;
 use App\Models\Alumni;
-use Illuminate\Database\QueryException;
+use App\Services\AlumniImportParser;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Auth;
 use App\Services\AuditLogger;
 use App\Services\AlumniImportProgress;
+use App\Services\AlumniImportReport;
 
 class AlumniController extends Controller
 {
@@ -97,22 +98,36 @@ class AlumniController extends Controller
     public function import(Request $request)
     {
         $request->validate([
-            'file' => ['required_without:alumni_csv', 'file', 'mimes:csv,txt', 'max:10240'],
-            'alumni_csv' => ['required_without:file', 'file', 'mimes:csv,txt', 'max:10240'],
+            'file' => ['required_without:alumni_csv', 'file', 'mimes:csv,txt,xlsx', 'max:20480'],
+            'alumni_csv' => ['required_without:file', 'file', 'mimes:csv,txt,xlsx', 'max:20480'],
+            'mode' => ['nullable', 'in:smart,strict'],
         ]);
 
         $uploadedFile = $request->file('file') ?? $request->file('alumni_csv');
+        $mode = $request->input('mode', AlumniImportParser::MODE_SMART);
 
         // Save file to storage so Job can read it
         $path = $uploadedFile->store('imports');
         $fullPath = Storage::path($path);
         $importId = (string) Str::uuid();
-        $totalRows = $this->countCsvDataRows($fullPath);
+        /** @var AlumniImportParser $parser */
+        $parser = app(AlumniImportParser::class);
+        $preflight = $parser->preflight($fullPath, $mode);
+        $totalRows = (int) ($preflight['total_rows'] ?? 0);
+
+        if (!empty($preflight['missing_required_headers'])) {
+            @unlink($fullPath);
+            return response()->json([
+                'message' => 'Header wajib tidak ditemukan: ' . implode(', ', $preflight['missing_required_headers']),
+                'preflight' => $preflight,
+            ], 422);
+        }
 
         $forceSync = app()->environment('local') || config('queue.default') === 'sync';
 
         AlumniImportProgress::put($importId, [
             'status' => 'queued',
+            'mode' => $mode,
             'message' => 'File diterima server. Menunggu proses import...',
             'percentage' => 0,
             'total_rows' => $totalRows,
@@ -123,7 +138,7 @@ class AlumniController extends Controller
         ]);
 
         if ($forceSync) {
-            $summary = (new \App\Jobs\ImportAlumniJob($fullPath, auth()->id(), $importId, $totalRows))->handle();
+            $summary = (new ImportAlumniJob($fullPath, auth()->id(), $importId, $totalRows, $mode))->handle();
 
             AuditLogger::log('alumni.import_completed', 'alumni', null, [
                 'mode' => 'sync',
@@ -133,12 +148,13 @@ class AlumniController extends Controller
                 'message' => 'Import selesai diproses.',
                 'job_status' => 'done',
                 'import_id' => $importId,
+                'preflight' => $preflight,
                 'summary' => $summary,
             ]);
         }
 
         // Dispatch Job (async)
-        \App\Jobs\ImportAlumniJob::dispatch($fullPath, auth()->id(), $importId, $totalRows);
+        ImportAlumniJob::dispatch($fullPath, auth()->id(), $importId, $totalRows, $mode);
 
         AuditLogger::log('alumni.import_requested', 'alumni', null, [
             'mode' => 'queued',
@@ -148,8 +164,10 @@ class AlumniController extends Controller
             'message' => 'Import sedang berjalan di latar belakang. Jalankan worker queue agar data masuk.',
             'job_status' => 'queued',
             'import_id' => $importId,
+            'preflight' => $preflight,
             'summary' => [
                 'status' => 'queued',
+                'mode' => $mode,
                 'percentage' => 0,
                 'total_rows' => $totalRows,
                 'processed_rows' => 0,
@@ -157,6 +175,32 @@ class AlumniController extends Controller
                 'error_count' => 0,
             ],
         ]);
+    }
+
+    public function importPreview(Request $request)
+    {
+        $request->validate([
+            'file' => ['required_without:alumni_csv', 'file', 'mimes:csv,txt,xlsx', 'max:20480'],
+            'alumni_csv' => ['required_without:file', 'file', 'mimes:csv,txt,xlsx', 'max:20480'],
+            'mode' => ['nullable', 'in:smart,strict'],
+        ]);
+
+        $uploadedFile = $request->file('file') ?? $request->file('alumni_csv');
+        $mode = $request->input('mode', AlumniImportParser::MODE_SMART);
+        $path = $uploadedFile->store('imports');
+        $fullPath = Storage::path($path);
+
+        try {
+            /** @var AlumniImportParser $parser */
+            $parser = app(AlumniImportParser::class);
+            $result = $parser->preflight($fullPath, $mode);
+            return response()->json([
+                'message' => 'Preview import berhasil dibuat.',
+                'preview' => $result,
+            ]);
+        } finally {
+            @unlink($fullPath);
+        }
     }
 
     public function importProgress(string $importId)
@@ -171,7 +215,21 @@ class AlumniController extends Controller
             ], 404);
         }
 
+        if (!empty($progress['failed_report_path']) && Storage::disk('local')->exists($progress['failed_report_path'])) {
+            $progress['failed_report_url'] = url('/api/admin/alumni/import-report/' . urlencode($importId));
+        }
+
         return response()->json($progress);
+    }
+
+    public function downloadImportReport(string $importId)
+    {
+        $path = AlumniImportReport::path($importId);
+        if (!Storage::disk('local')->exists($path)) {
+            return response()->json(['message' => 'Laporan gagal import tidak ditemukan.'], 404);
+        }
+
+        return Storage::disk('local')->download($path, "import-failed-{$importId}.csv");
     }
 
     /**
