@@ -21,6 +21,9 @@ use App\Services\AuditLogger;
 
 class ResponseController extends Controller
 {
+    protected const MAX_SIGNED_BIGINT = '9223372036854775807';
+    protected const MAX_DECIMAL_10_2_ABS = 99999999.99;
+
     protected function trimString($value, int $maxLen): ?string
     {
         if (is_array($value)) {
@@ -778,6 +781,14 @@ class ResponseController extends Controller
             return null;
         }
 
+        $unsigned = ltrim($digitsOnly, '-');
+        if (strlen($unsigned) > 19) {
+            return null;
+        }
+        if (strlen($unsigned) === 19 && strcmp($unsigned, self::MAX_SIGNED_BIGINT) > 0) {
+            return null;
+        }
+
         return (int) $digitsOnly;
     }
 
@@ -797,7 +808,14 @@ class ResponseController extends Controller
             return null;
         }
 
-        return round((float) $normalized, 2);
+        // Avoid storing large identifiers (e.g. NIM/NoHP) as decimal.
+        // val_decimal(10,2) max abs value is 99,999,999.99.
+        $floatValue = round((float) $normalized, 2);
+        if (abs($floatValue) > self::MAX_DECIMAL_10_2_ABS) {
+            return null;
+        }
+
+        return $floatValue;
     }
 
     protected function normalizeDateValue(?string $value): ?string
