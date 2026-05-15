@@ -14,6 +14,7 @@ use App\Http\Controllers\EmailTemplateController;
 use App\Http\Controllers\HomepageController;
 use App\Http\Controllers\JobController;
 use App\Http\Controllers\NewsController;
+use App\Http\Controllers\PopupBannerController;
 use App\Http\Controllers\QuestionBankController;
 use App\Http\Controllers\QuestionController;
 use App\Http\Controllers\QuestionnaireController;
@@ -47,6 +48,8 @@ Route::get('/jobs', [JobController::class, 'index']);
 Route::get('/jobs/{id}', [JobController::class, 'show']);
 Route::get('/news', [NewsController::class, 'index']);
 Route::get('/news/{id}', [NewsController::class, 'show']);
+Route::get('/popup-banner/active', [PopupBannerController::class, 'active']);
+Route::get('/popup-banners/{popupBanner}/image', [PopupBannerController::class, 'image']);
 
 // --- PUBLIC QUESTIONNAIRE & LOOKUP ---
 Route::get('/questionnaires/active', [QuestionnaireController::class, 'active']);
@@ -117,6 +120,12 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Admin Tools
     Route::post('/admin/generate-survey-link', [SurveyTokenController::class, 'generate']);
+    Route::get('/admin/popup-banners', [PopupBannerController::class, 'index']);
+    Route::post('/admin/popup-banners', [PopupBannerController::class, 'store']);
+    Route::get('/admin/popup-banners/{popupBanner}', [PopupBannerController::class, 'show']);
+    Route::put('/admin/popup-banners/{popupBanner}', [PopupBannerController::class, 'update']);
+    Route::post('/admin/popup-banners/{popupBanner}', [PopupBannerController::class, 'update']);
+    Route::delete('/admin/popup-banners/{popupBanner}', [PopupBannerController::class, 'destroy']);
 
     // Admin Role Specific
     Route::middleware(['role:super_admin,admin_universitas,admin_fakultas,admin_prodi'])
