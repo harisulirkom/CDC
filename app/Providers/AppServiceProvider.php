@@ -6,6 +6,7 @@ use Illuminate\Support\ServiceProvider;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Gate;
+use RuntimeException;
 use App\Models\Alumni;
 use App\Models\Response;
 use App\Models\Questionnaire;
@@ -30,6 +31,8 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        $this->enforceProductionSecurityGuards();
+
         Gate::policy(Alumni::class, AlumniPolicy::class);
         Gate::policy(Response::class, ResponsePolicy::class);
         Gate::policy(Questionnaire::class, QuestionnairePolicy::class);
@@ -55,5 +58,28 @@ class AppServiceProvider extends ServiceProvider
             $userId = optional($request->user())->id ?: 'guest';
             return Limit::perMinute(20)->by($request->ip() . '|' . $userId);
         });
+    }
+
+    protected function enforceProductionSecurityGuards(): void
+    {
+        if (!app()->environment('production')) {
+            return;
+        }
+
+        if ((bool) config('app.debug', false)) {
+            throw new RuntimeException('Security guard: APP_DEBUG must be false in production.');
+        }
+
+        $defaultConnection = (string) config('database.default', 'mysql');
+        $dbUsername = strtolower(trim((string) data_get(
+            config("database.connections.{$defaultConnection}"),
+            'username',
+            ''
+        )));
+        $blockedUsers = ['root', 'postgres', 'sa', 'administrator'];
+
+        if (in_array($dbUsername, $blockedUsers, true)) {
+            throw new RuntimeException('Security guard: database username must be least-privilege in production.');
+        }
     }
 }

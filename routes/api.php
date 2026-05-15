@@ -5,6 +5,7 @@ use App\Http\Controllers\AlumniBlastController;
 use App\Http\Controllers\AlumniSearchController;
 use App\Http\Controllers\AdminUserController;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\CareerAdvisorController;
 use App\Http\Controllers\CtaController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DashboardInsightsController;
@@ -142,6 +143,16 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::middleware(['role:super_admin,admin_universitas'])
         ->get('/admin/kuisioner', [QuestionnaireController::class, 'index']);
+
+    Route::prefix('v1/career-advisor')->group(function () {
+        Route::get('/options', [CareerAdvisorController::class, 'options']);
+        Route::post('/sessions', [CareerAdvisorController::class, 'createSession']);
+        Route::patch('/sessions/{session}/profile', [CareerAdvisorController::class, 'updateProfile']);
+        Route::post('/sessions/{session}/generate', [CareerAdvisorController::class, 'generate'])->middleware('throttle:submit');
+        Route::get('/sessions/{session}/result', [CareerAdvisorController::class, 'result']);
+        Route::post('/sessions/{session}/action', [CareerAdvisorController::class, 'saveAction']);
+        Route::post('/sessions/{session}/feedback', [CareerAdvisorController::class, 'saveFeedback']);
+    });
 
     // Admin Users
     Route::get('/admin/users', [AdminUserController::class, 'index']);

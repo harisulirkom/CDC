@@ -61,7 +61,9 @@
             "dev-master": "12.x-dev"
         },
         "laravel": {
-            "dont-discover": []
+            "dont-discover": [
+                "spiral/roadrunner-laravel"
+            ]
         }
     },
     "config": {

@@ -1,0 +1,35 @@
+# CDC Nginx Security Hardening
+# Cara pakai:
+# 1) Bagian "HTTP CONTEXT" dipasang di dalam blok `http {}`.
+# 2) Bagian "SERVER CONTEXT" dipasang di dalam blok `server {}` vhost CDC.
+
+# =============================
+# HTTP CONTEXT
+# =============================
+# Batasi request per IP (global)
+limit_req_zone $binary_remote_addr zone=cdc_per_ip:20m rate=20r/s;
+# Batasi login yang sensitif
+limit_req_zone $binary_remote_addr zone=cdc_login:10m rate=5r/m;
+# Batasi koneksi simultan per IP
+limit_conn_zone $binary_remote_addr zone=cdc_conn_per_ip:20m;
+
+# =============================
+# SERVER CONTEXT
+# =============================
+# Timeout proteksi slowloris / payload lambat
+client_header_timeout 15s;
+client_body_timeout 15s;
+send_timeout 30s;
+
+# Batasi body request agar tidak abuse upload besar
+client_max_body_size 32m;
+
+# Aktifkan limit koneksi & request umum
+limit_conn cdc_conn_per_ip 40;
+limit_req zone=cdc_per_ip burst=40 nodelay;
+
+# Khusus endpoint login API Laravel
+location = /api/login {
+    limit_req zone=cdc_login burst=10 nodelay;
+    try_files $uri /index.php?$query_string;
+}

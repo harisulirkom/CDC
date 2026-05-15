@@ -1,0 +1,57 @@
+groups:
+  - name: cdc-app-alerts
+    interval: 30s
+    rules:
+      - alert: CDCHigh5xxRate
+        expr: rate(nginx_http_requests_total{status=~"5.."}[5m]) > 1
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "CDC 5xx rate tinggi"
+          description: "Rate 5xx > 1 req/s selama 3 menit."
+
+      - alert: CDCHighLatencyP95
+        expr: histogram_quantile(0.95, sum(rate(nginx_http_request_duration_seconds_bucket[5m])) by (le)) > 1.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CDC latency p95 tinggi"
+          description: "Latency p95 > 1.5s selama 5 menit."
+
+      - alert: CDCHighCPUUsage
+        expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU server CDC tinggi"
+          description: "CPU > 85% selama 5 menit."
+
+      - alert: CDCLowDiskSpace
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 15
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk space rendah"
+          description: "Sisa disk root < 15%."
+
+      - alert: CDCMySQLConnectionsHigh
+        expr: mysql_global_status_threads_connected > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Koneksi MySQL tinggi"
+          description: "Threads connected > 300 selama 5 menit."
+
+      - alert: CDCRedisEvictions
+        expr: increase(redis_evicted_keys_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis evictions terdeteksi"
+          description: "Ada key eviction pada Redis dalam 5 menit terakhir."

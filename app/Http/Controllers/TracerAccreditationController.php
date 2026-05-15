@@ -116,10 +116,20 @@ class TracerAccreditationController extends Controller
     protected function resolveQuestionnaire(int $questionnaireId): ?Questionnaire
     {
         if ($questionnaireId > 0) {
-            $explicit = Questionnaire::find($questionnaireId);
-            if ($explicit && strtolower((string) $explicit->audience) === 'alumni') {
-                return $explicit;
+            $requested = Questionnaire::find($questionnaireId);
+            if ($requested && $this->normalizeAudience((string) ($requested->audience_normalized ?? $requested->audience ?? '')) === 'alumni') {
+                return $requested;
             }
+        }
+
+        $activeAlumni = Questionnaire::query()
+            ->where('audience', 'alumni')
+            ->where('is_active', true)
+            ->orderByDesc('id')
+            ->first();
+
+        if ($activeAlumni) {
+            return $activeAlumni;
         }
 
         return Questionnaire::query()
@@ -207,5 +217,11 @@ class TracerAccreditationController extends Controller
     protected function slugify(string $value): string
     {
         return str_replace(['-', ' '], '_', strtolower(trim($value)));
+    }
+
+    protected function normalizeAudience(?string $audience): string
+    {
+        $audience = strtolower(trim((string) ($audience ?? '')));
+        return in_array($audience, ['alumni', 'pengguna', 'umum'], true) ? $audience : 'alumni';
     }
 }

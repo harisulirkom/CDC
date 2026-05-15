@@ -466,14 +466,15 @@ class AlumniController extends Controller
         }
 
         $user->loadMissing('role');
-        $roleName = $user->role->nama_role ?? $user->role ?? null;
+        $roleSlug = $this->roleSlug($user->role->nama_role ?? $user->role ?? '');
 
-        if ($roleName === 'Admin Fakultas') {
+        if ($roleSlug === 'admin_fakultas') {
             $faculty = trim((string) ($user->fakultas ?? ''));
             if ($faculty !== '') {
                 $normalized = $this->normalizeUnit($faculty);
                 $stripped = $this->normalizeUnit($this->stripFakultasPrefix($faculty));
-                $variants = array_values(array_unique(array_filter([$normalized, $stripped])));
+                $prefixed = $stripped !== '' ? $this->normalizeUnit('fakultas '.$stripped) : '';
+                $variants = array_values(array_unique(array_filter([$normalized, $stripped, $prefixed])));
                 if (!$variants) {
                     return $query->whereRaw('1=0');
                 }
@@ -487,7 +488,7 @@ class AlumniController extends Controller
             return $query->whereRaw('1=0');
         }
 
-        if ($roleName === 'Admin Prodi') {
+        if ($roleSlug === 'admin_prodi') {
             $prodi = trim((string) ($user->prodi ?? ''));
             if ($prodi !== '') {
                 $normalized = $this->normalizeUnit($prodi);
@@ -509,5 +510,10 @@ class AlumniController extends Controller
         $value = trim($value);
         $value = preg_replace('/\\s+/', ' ', $value);
         return strtolower($value ?? '');
+    }
+
+    protected function roleSlug(string $value): string
+    {
+        return str_replace(['-', ' '], '_', strtolower(trim($value)));
     }
 }

@@ -481,7 +481,14 @@ class TracerAccreditationSummaryService
 
     protected function normalizeNim(?string $value): string
     {
-        return strtolower(trim((string) ($value ?? '')));
+        $text = strtolower(trim((string) ($value ?? '')));
+        if ($text === '') {
+            return '';
+        }
+
+        // Allow matching between "20.11.001", "20-11-001", "2011001", etc.
+        $collapsed = preg_replace('/[^a-z0-9]/', '', $text);
+        return $collapsed ?? $text;
     }
 
     protected function safeText($value, string $fallback = '-'): string
