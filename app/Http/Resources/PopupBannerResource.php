@@ -33,9 +33,22 @@ class PopupBannerResource extends JsonResource
         }
 
         if ($this->image_url) {
-            return $this->image_url;
+            return $this->normalizeExternalImageUrl((string) $this->image_url);
         }
 
         return null;
+    }
+
+    protected function normalizeExternalImageUrl(string $url): string
+    {
+        if (preg_match('#drive\.google\.com/file/d/([^/]+)#', $url, $matches)) {
+            return 'https://drive.google.com/thumbnail?id=' . $matches[1] . '&sz=w1600';
+        }
+
+        if (preg_match('#drive\.google\.com/open\?id=([^&]+)#', $url, $matches)) {
+            return 'https://drive.google.com/thumbnail?id=' . $matches[1] . '&sz=w1600';
+        }
+
+        return $url;
     }
 }
