@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\AlumniController;
 use App\Http\Controllers\AlumniBlastController;
+use App\Http\Controllers\AlumniHubController;
 use App\Http\Controllers\AlumniSearchController;
 use App\Http\Controllers\AdminUserController;
 use App\Http\Controllers\AuthController;
@@ -50,6 +51,7 @@ Route::get('/news', [NewsController::class, 'index']);
 Route::get('/news/{id}', [NewsController::class, 'show']);
 Route::get('/popup-banner/active', [PopupBannerController::class, 'active']);
 Route::get('/popup-banners/{popupBanner}/image', [PopupBannerController::class, 'image']);
+Route::get('/alumni-hub', [AlumniHubController::class, 'show']);
 
 // --- PUBLIC QUESTIONNAIRE & LOOKUP ---
 Route::get('/questionnaires/active', [QuestionnaireController::class, 'active']);
@@ -126,6 +128,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/admin/popup-banners/{popupBanner}', [PopupBannerController::class, 'update']);
     Route::post('/admin/popup-banners/{popupBanner}', [PopupBannerController::class, 'update']);
     Route::delete('/admin/popup-banners/{popupBanner}', [PopupBannerController::class, 'destroy']);
+    Route::get('/admin/alumni-hub', [AlumniHubController::class, 'show']);
+    Route::put('/admin/alumni-hub', [AlumniHubController::class, 'update']);
 
     // Admin Role Specific
     Route::middleware(['role:super_admin,admin_universitas,admin_fakultas,admin_prodi'])
